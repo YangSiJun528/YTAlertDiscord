@@ -11,6 +11,9 @@ on:
     - cron: "0 */2 * * *"  # 2시간마다 실행 (예: "*/15 * * * *"로 변경 시 15분마다 실행)
   workflow_dispatch:  # 수동 실행 가능 (GitHub Actions 탭에서 트리거)
 
+permissions:
+  contents: write  # state.json 푸시를 위한 쓰기 권한
+
 jobs:
   notify:
     runs-on: ubuntu-latest
@@ -67,6 +70,7 @@ jobs:
           
           # 새 해시 저장용 파일
           > new_hashes.txt
+          > new_videos_info.txt
           
           # 각 영상 확인
           line_num=0
@@ -85,7 +89,17 @@ jobs:
               title=$(sed -n "${line_num}p" video_titles.txt)
               date=$(sed -n "${line_num}p" video_dates.txt)
               
-              # Discord 알림 전송
+              # 나중에 역순으로 보내기 위해 정보 저장
+              echo "$video_id|$title|$date" >> new_videos_info.txt
+            fi
+          done < video_ids.txt
+          
+          # 새 영상이 있으면 역순으로 Discord 알림 전송 (오래된 것부터)
+          if [ -s new_videos_info.txt ]; then
+            echo "NEW_VIDEOS=true" >> $GITHUB_ENV
+            
+            # 역순으로 알림 전송
+            tac new_videos_info.txt | while IFS='|' read -r video_id title date; do
               message="🎥 **새 영상 업로드!**\n제목: $title\n날짜: $date\n링크: https://youtu.be/$video_id"
               curl -H "Content-Type: application/json" \
                    -X POST \
@@ -93,12 +107,7 @@ jobs:
                    ${{ secrets.DISCORD_WEBHOOK_URL }}
               
               sleep 1  # Discord API 레이트 리밋 방지
-            fi
-          done < video_ids.txt
-          
-          # 새 해시가 있는지 확인
-          if [ -s new_hashes.txt ]; then
-            echo "NEW_VIDEOS=true" >> $GITHUB_ENV
+            done
           else
             echo "NEW_VIDEOS=false" >> $GITHUB_ENV
             echo "새 영상 없음"
