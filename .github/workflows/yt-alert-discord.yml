@@ -17,9 +17,7 @@ jobs:
     env:
       MAX_EXTRACT: 5     # RSS에서 확인할 최대 영상 개수 (예: 10으로 늘리면 더 많은 영상 확인)
       MAX_STORED: 100    # state.json에 저장할 최대 해시 개수 (오래된 것부터 자동 삭제)
-      CHANNEL_ID: ${{ secrets.CHANNEL_ID }}  # YouTube 채널 ID
-      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}  # Discord Webhook URL
-      HASH_SALT: ${{ secrets.HASH_SALT }}  # 영상 ID 해시용 솔트
+
     steps:
       - name: 체크아웃 코드  # 레포지토리 코드 가져오기
         uses: actions/checkout@v4
@@ -27,7 +25,7 @@ jobs:
       - name: RSS 피드 다운로드  # YouTube 채널의 RSS 피드 가져오기
         id: fetch
         run: |
-          RSS_URL="https://www.youtube.com/feeds/videos.xml?channel_id=${{ env.CHANNEL_ID }}"
+          RSS_URL="https://www.youtube.com/feeds/videos.xml?channel_id=${{ secrets.CHANNEL_ID }}"
           
           echo "RSS 피드 다운로드 중..."
           if curl -s --fail "$RSS_URL" > feed.xml; then
@@ -66,7 +64,7 @@ jobs:
         run: |
           # 해시 함수: 영상 ID + 솔트를 SHA-256으로 해시
           hash_id() {
-            echo -n "$1${{ env.HASH_SALT }}" | sha256sum | cut -d ' ' -f1
+            echo -n "$1${{ secrets.HASH_SALT }}" | sha256sum | cut -d ' ' -f1
           }
           
           # 새로운 영상 ID를 해시하여 기존 해시와 비교
@@ -101,7 +99,7 @@ jobs:
               curl -H "Content-Type: application/json" \
                    -X POST \
                    -d "{\"content\": \"$MESSAGE\"}" \
-                   ${{ env.DISCORD_WEBHOOK_URL }}
+                   ${{ secrets.DISCORD_WEBHOOK_URL }}
             done
           else
             echo "새 영상 없음"
