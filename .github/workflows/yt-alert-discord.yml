@@ -39,9 +39,9 @@ jobs:
         id: extract
         run: |
           # 최근 MAX_EXTRACT 개 영상의 ID, 제목, 업로드 시간 추출
-          IDS=$(grep -oPm${{ env.MAX_EXTRACT }} "<yt:videoId>[^<]+" feed.xml | sed 's/<yt:videoId>//' | jq -R . | jq -s .)
-          TITLES=$(grep -oPm${{ env.MAX_EXTRACT }} "<title>[^<]+" feed.xml | sed 's/<title>//' | jq -R . | jq -s .)
-          DATES=$(grep -oPm${{ env.MAX_EXTRACT }} "<published>[^<]+" feed.xml | sed 's/<published>//' | jq -R . | jq -s .)
+          IDS=$(grep -oPm${MAX_EXTRACT} "<yt:videoId>[^<]+" feed.xml | sed 's/<yt:videoId>//' | jq -R -c -s .)
+          TITLES=$(grep -oPm${MAX_EXTRACT} "<title>[^<]+" feed.xml | sed 's/<title>//' | jq -R -c -s .)
+          DATES=$(grep -oPm${MAX_EXTRACT} "<published>[^<]+" feed.xml | sed 's/<published>//' | jq -R -c -s .)
           
           echo "VIDEO_IDS=$IDS" >> $GITHUB_ENV
           echo "VIDEO_TITLES=$TITLES" >> $GITHUB_ENV
