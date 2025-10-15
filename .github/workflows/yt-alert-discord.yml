@@ -72,33 +72,35 @@ jobs:
             echo -n "$1${{ secrets.HASH_SALT }}" | sha256sum | cut -d ' ' -f1
           }
           
-          # 새로운 영상 ID를 해시하여 기존 해시와 비교
-          VIDEO_IDS_JSON="${{ env.VIDEO_IDS }}"
+          # JSON에서 배열 재생성
+          mapfile -t IDS_ARRAY < <(echo "${{ env.VIDEO_IDS }}" | jq -r '.[]')
+          mapfile -t TITLES_ARRAY < <(echo "${{ env.VIDEO_TITLES }}" | jq -r '.[]')
+          mapfile -t DATES_ARRAY < <(echo "${{ env.VIDEO_DATES }}" | jq -r '.[]')
+          
           NEW_HASHES=()
           NEW_IDS=()
+          
           for i in "${!IDS_ARRAY[@]}"; do
-            ID=$(echo "$VIDEO_IDS_JSON" | jq -r ".[$i]")
+            ID="${IDS_ARRAY[$i]}"
             HASH=$(hash_id "$ID")
             if ! echo "${{ env.PREV_HASHES }}" | jq -e --arg h "$HASH" 'index($h) != null' > /dev/null; then
               NEW_HASHES+=("$HASH")
-              NEW_IDS+=("$ID")  # 알림용 원본 ID 저장
+              NEW_IDS+=("$ID")
             fi
           done
           
-          # 새 해시와 ID를 JSON 배열로 변환
           NEW_HASHES_JSON=$(printf '%s\n' "${NEW_HASHES[@]}" | jq -R . | jq -s .)
           NEW_IDS_JSON=$(printf '%s\n' "${NEW_IDS[@]}" | jq -R . | jq -s .)
           
           echo "NEW_HASHES=$NEW_HASHES_JSON" >> $GITHUB_ENV
           echo "NEW_IDS=$NEW_IDS_JSON" >> $GITHUB_ENV
 
-          if [ "$NEW_HASHES_JSON" != "[]" ]; then
-            echo "새 영상 발견 (해시): $NEW_HASHES_JSON"
-            # 각 새 영상에 대해 Discord 알림 전송
-            for i in "${!IDS_ARRAY[@]}"; do
-              ID=$(echo "$NEW_IDS_JSON" | jq -r ".[$i]")
-              TITLE=$(echo "${{ env.VIDEO_TITLES }}" | jq -r ".[$i]")
-              DATE=$(echo "${{ env.VIDEO_DATES }}" | jq -r ".[$i]")
+          if [ "${#NEW_IDS[@]}" -gt 0 ]; then
+            echo "새 영상 발견: ${#NEW_IDS[@]}개"
+            for i in "${!NEW_IDS[@]}"; do
+              ID="${NEW_IDS[$i]}"
+              TITLE="${TITLES_ARRAY[$i]}"
+              DATE="${DATES_ARRAY[$i]}"
               
               MESSAGE="🎥 **새 영상 업로드!**\n제목: $TITLE\n날짜: $DATE\n링크: https://youtu.be/$ID"
               curl -H "Content-Type: application/json" \
