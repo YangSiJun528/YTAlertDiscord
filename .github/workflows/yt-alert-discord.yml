@@ -1,0 +1,121 @@
+name: YTAlertDiscord  # YouTube 새 영상 알림을 Discord로 전송
+
+# 필요한 GitHub Secrets (레포지토리 Settings > Secrets and variables > Actions에서 설정):
+# - CHANNEL_ID: YouTube 채널 ID (예: UCxxxxxxxxxxxxxxxxxxxxxx, YouTube 채널 URL에서 확인)
+# - DISCORD_WEBHOOK_URL: Discord Webhook URL (Discord 서버 설정에서 생성)
+# - HASH_SALT: 해시용 솔트 문자열 (랜덤 생성, 예: `openssl rand -hex 16` 실행)
+# Secrets가 없으면 워크플로우가 실패하니 반드시 설정하세요!
+
+on:
+  schedule:
+    - cron: "0 */2 * * *"  # 2시간마다 실행 (예: "*/15 * * * *"로 변경 시 15분마다 실행)
+  workflow_dispatch:  # 수동 실행 가능 (GitHub Actions 탭에서 트리거)
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    env:
+      MAX_EXTRACT: 5     # RSS에서 확인할 최대 영상 개수 (예: 10으로 늘리면 더 많은 영상 확인)
+      MAX_STORED: 100    # state.json에 저장할 최대 해시 개수 (오래된 것부터 자동 삭제)
+      CHANNEL_ID: ${{ secrets.CHANNEL_ID }}  # YouTube 채널 ID
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}  # Discord Webhook URL
+      HASH_SALT: ${{ secrets.HASH_SALT }}  # 영상 ID 해시용 솔트
+    steps:
+      - name: 체크아웃 코드  # 레포지토리 코드 가져오기
+        uses: actions/checkout@v4
+
+      - name: RSS 피드 다운로드  # YouTube 채널의 RSS 피드 가져오기
+        id: fetch
+        run: |
+          RSS_URL="https://www.youtube.com/feeds/videos.xml?channel_id=${{ env.CHANNEL_ID }}"
+          
+          echo "RSS 피드 다운로드 중..."
+          if curl -s --fail "$RSS_URL" > feed.xml; then
+            echo "RSS 피드 다운로드 성공"
+          else
+            echo "RSS 피드 다운로드 실패 (CHANNEL_ID가 올바른지 확인하세요)"
+            exit 1
+          fi
+
+      - name: 최신 영상 정보 추출  # RSS에서 영상 ID, 제목, 업로드 날짜 추출
+        id: extract
+        run: |
+          # 최근 MAX_EXTRACT 개 영상의 ID, 제목, 업로드 시간 추출
+          IDS=$(grep -oPm${{ env.MAX_EXTRACT }} "<yt:videoId>[^<]+" feed.xml | sed 's/<yt:videoId>//' | jq -R . | jq -s .)
+          TITLES=$(grep -oPm${{ env.MAX_EXTRACT }} "<title>[^<]+" feed.xml | sed 's/<title>//' | jq -R . | jq -s .)
+          DATES=$(grep -oPm${{ env.MAX_EXTRACT }} "<published>[^<]+" feed.xml | sed 's/<published>//' | jq -R . | jq -s .)
+          
+          echo "VIDEO_IDS=$IDS" >> $GITHUB_ENV
+          echo "VIDEO_TITLES=$TITLES" >> $GITHUB_ENV
+          echo "VIDEO_DATES=$DATES" >> $GITHUB_ENV
+
+      - name: 이전 업로드 상태 불러오기  # state.json에서 이전 영상 해시 목록 가져오기
+        id: state
+        run: |
+          STATE_FILE=state.json
+          if [ -f $STATE_FILE ]; then
+            PREV_HASHES=$(jq -r '.posted' $STATE_FILE)
+          else
+            PREV_HASHES="[]"
+            echo "{}" > $STATE_FILE  # 파일 없으면 초기화
+          fi
+          echo "PREV_HASHES=$PREV_HASHES" >> $GITHUB_ENV
+
+      - name: 새로운 영상 확인 및 알림 전송  # 새 영상 확인 후 Discord로 알림 보내기
+        id: notify
+        run: |
+          # 해시 함수: 영상 ID + 솔트를 SHA-256으로 해시
+          hash_id() {
+            echo -n "$1${{ env.HASH_SALT }}" | sha256sum | cut -d ' ' -f1
+          }
+          
+          # 새로운 영상 ID를 해시하여 기존 해시와 비교
+          VIDEO_IDS_JSON="${{ env.VIDEO_IDS }}"
+          NEW_HASHES=()
+          NEW_IDS=()
+          for i in $(seq 0 $(($(echo "$VIDEO_IDS_JSON" | jq length)-1))); do
+            ID=$(echo "$VIDEO_IDS_JSON" | jq -r ".[$i]")
+            HASH=$(hash_id "$ID")
+            if ! echo "${{ env.PREV_HASHES }}" | jq -e --arg h "$HASH" 'index($h) != null' > /dev/null; then
+              NEW_HASHES+=("$HASH")
+              NEW_IDS+=("$ID")  # 알림용 원본 ID 저장
+            fi
+          done
+          
+          # 새 해시와 ID를 JSON 배열로 변환
+          NEW_HASHES_JSON=$(printf '%s\n' "${NEW_HASHES[@]}" | jq -R . | jq -s .)
+          NEW_IDS_JSON=$(printf '%s\n' "${NEW_IDS[@]}" | jq -R . | jq -s .)
+          
+          echo "NEW_HASHES=$NEW_HASHES_JSON" >> $GITHUB_ENV
+          echo "NEW_IDS=$NEW_IDS_JSON" >> $GITHUB_ENV
+
+          if [ "$NEW_HASHES_JSON" != "[]" ]; then
+            echo "새 영상 발견 (해시): $NEW_HASHES_JSON"
+            # 각 새 영상에 대해 Discord 알림 전송
+            for i in $(seq 0 $(($(echo "$NEW_HASHES_JSON" | jq length)-1))); do
+              ID=$(echo "$NEW_IDS_JSON" | jq -r ".[$i]")
+              TITLE=$(echo "${{ env.VIDEO_TITLES }}" | jq -r ".[$i]")
+              DATE=$(echo "${{ env.VIDEO_DATES }}" | jq -r ".[$i]")
+              
+              MESSAGE="🎥 **새 영상 업로드!**\n제목: $TITLE\n날짜: $DATE\n링크: https://youtu.be/$ID"
+              curl -H "Content-Type: application/json" \
+                   -X POST \
+                   -d "{\"content\": \"$MESSAGE\"}" \
+                   ${{ env.DISCORD_WEBHOOK_URL }}
+            done
+          else
+            echo "새 영상 없음"
+          fi
+
+      - name: 상태 파일 업데이트  # state.json에 새 해시 저장 및 GitHub 푸시
+        if: env.NEW_HASHES != '[]'
+        run: |
+          # 기존 해시에 새 해시 추가, 중복 제거, MAX_STORED 초과 시 최근 MAX_STORED 개만 유지
+          UPDATED_HASHES=$(echo "${{ env.PREV_HASHES }}" | jq --argjson new "${{ env.NEW_HASHES }}" '. + $new | unique | if length > ${{ env.MAX_STORED }} then .[-${{ env.MAX_STORED }}:] else . end')
+          echo "{\"posted\": $UPDATED_HASHES}" > state.json
+          
+          git config --global user.name "github-actions"
+          git config --global user.email "actions@github.com"
+          git add state.json
+          git commit -m "새 영상 해시 업데이트" || echo "커밋할 변경사항 없음"
+          git push
