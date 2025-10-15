@@ -34,4 +34,4 @@ YouTube 채널의 새 영상을 자동으로 감지하여 Discord로 알림을 �
 
 ## 라이센스
 
-MIT License
+[MIT License](/LICENSE)
