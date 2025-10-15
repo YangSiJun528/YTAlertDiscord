@@ -46,6 +46,11 @@ jobs:
           echo "VIDEO_IDS=$IDS" >> $GITHUB_ENV
           echo "VIDEO_TITLES=$TITLES" >> $GITHUB_ENV
           echo "VIDEO_DATES=$DATES" >> $GITHUB_ENV
+          
+          # JSON 배열을 Bash 배열로 안전하게 읽기
+          mapfile -t IDS_ARRAY < <(echo "$IDS" | jq -r '.[]')
+          mapfile -t TITLES_ARRAY < <(echo "$TITLES" | jq -r '.[]')
+          mapfile -t DATES_ARRAY < <(echo "$DATES" | jq -r '.[]')
 
       - name: 이전 업로드 상태 불러오기  # state.json에서 이전 영상 해시 목록 가져오기
         id: state
@@ -71,7 +76,7 @@ jobs:
           VIDEO_IDS_JSON="${{ env.VIDEO_IDS }}"
           NEW_HASHES=()
           NEW_IDS=()
-          for i in $(seq 0 $(($(echo "$VIDEO_IDS_JSON" | jq length)-1))); do
+          for i in "${!IDS_ARRAY[@]}"; do
             ID=$(echo "$VIDEO_IDS_JSON" | jq -r ".[$i]")
             HASH=$(hash_id "$ID")
             if ! echo "${{ env.PREV_HASHES }}" | jq -e --arg h "$HASH" 'index($h) != null' > /dev/null; then
@@ -90,7 +95,7 @@ jobs:
           if [ "$NEW_HASHES_JSON" != "[]" ]; then
             echo "새 영상 발견 (해시): $NEW_HASHES_JSON"
             # 각 새 영상에 대해 Discord 알림 전송
-            for i in $(seq 0 $(($(echo "$NEW_HASHES_JSON" | jq length)-1))); do
+            for i in "${!IDS_ARRAY[@]}"; do
               ID=$(echo "$NEW_IDS_JSON" | jq -r ".[$i]")
               TITLE=$(echo "${{ env.VIDEO_TITLES }}" | jq -r ".[$i]")
               DATE=$(echo "${{ env.VIDEO_DATES }}" | jq -r ".[$i]")
