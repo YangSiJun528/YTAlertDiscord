@@ -1,7 +1,7 @@
 name: YTAlertDiscord  # YouTube 새 영상 알림을 Discord로 전송
 
 # 필요한 GitHub Secrets (레포지토리 Settings > Secrets and variables > Actions에서 설정):
-# - CHANNEL_ID: YouTube 채널 ID (예: UCxxxxxxxxxxxxxxxxxxxxxx, YouTube 채널 URL에서 확인)
+# - CHANNEL_ID: YouTube 채널 ID (예: UCxxxxxxxxxxxxxxxxxxxxxx, YouTube 사용자 프로필 > 공유 > 채널 ID 복사로 값 확인 가능)
 # - DISCORD_WEBHOOK_URL: Discord Webhook URL (Discord 서버 설정에서 생성)
 # - HASH_SALT: 해시용 솔트 문자열 (랜덤 생성, 예: `openssl rand -hex 16` 실행)
 # Secrets가 없으면 워크플로우가 실패하니 반드시 설정하세요!
@@ -39,30 +39,23 @@ jobs:
         id: extract
         run: |
           # 최근 MAX_EXTRACT 개 영상의 ID, 제목, 업로드 시간 추출
-          IDS=$(grep -oPm${MAX_EXTRACT} "<yt:videoId>[^<]+" feed.xml | sed 's/<yt:videoId>//' | jq -R -c -s .)
-          TITLES=$(grep -oPm${MAX_EXTRACT} "<title>[^<]+" feed.xml | sed 's/<title>//' | jq -R -c -s .)
-          DATES=$(grep -oPm${MAX_EXTRACT} "<published>[^<]+" feed.xml | sed 's/<published>//' | jq -R -c -s .)
+          grep -oPm${MAX_EXTRACT} "<yt:videoId>[^<]+" feed.xml | sed 's/<yt:videoId>//' > video_ids.txt
+          grep -oPm${MAX_EXTRACT} "<title>[^<]+" feed.xml | sed 's/<title>//' > video_titles.txt
+          grep -oPm${MAX_EXTRACT} "<published>[^<]+" feed.xml | sed 's/<published>//' > video_dates.txt
           
-          echo "VIDEO_IDS=$IDS" >> $GITHUB_ENV
-          echo "VIDEO_TITLES=$TITLES" >> $GITHUB_ENV
-          echo "VIDEO_DATES=$DATES" >> $GITHUB_ENV
-          
-          # JSON 배열을 Bash 배열로 안전하게 읽기
-          mapfile -t IDS_ARRAY < <(echo "$IDS" | jq -r '.[]')
-          mapfile -t TITLES_ARRAY < <(echo "$TITLES" | jq -r '.[]')
-          mapfile -t DATES_ARRAY < <(echo "$DATES" | jq -r '.[]')
+          echo "영상 정보 추출 완료"
 
       - name: 이전 업로드 상태 불러오기  # state.json에서 이전 영상 해시 목록 가져오기
         id: state
         run: |
           STATE_FILE=state.json
           if [ -f $STATE_FILE ]; then
-            PREV_HASHES=$(jq -r '.posted' $STATE_FILE)
+            jq -r '.posted[]' $STATE_FILE > prev_hashes.txt 2>/dev/null || touch prev_hashes.txt
           else
-            PREV_HASHES="[]"
-            echo "{}" > $STATE_FILE  # 파일 없으면 초기화
+            touch prev_hashes.txt
+            echo '{"posted":[]}' > $STATE_FILE  # 파일 없으면 초기화
           fi
-          echo "PREV_HASHES=$PREV_HASHES" >> $GITHUB_ENV
+          echo "이전 해시 목록 로드 완료"
 
       - name: 새로운 영상 확인 및 알림 전송  # 새 영상 확인 후 Discord로 알림 보내기
         id: notify
@@ -72,53 +65,68 @@ jobs:
             echo -n "$1${{ secrets.HASH_SALT }}" | sha256sum | cut -d ' ' -f1
           }
           
-          # JSON에서 배열 재생성
-          mapfile -t IDS_ARRAY < <(echo "${{ env.VIDEO_IDS }}" | jq -r '.[]')
-          mapfile -t TITLES_ARRAY < <(echo "${{ env.VIDEO_TITLES }}" | jq -r '.[]')
-          mapfile -t DATES_ARRAY < <(echo "${{ env.VIDEO_DATES }}" | jq -r '.[]')
+          # 새 해시 저장용 파일
+          > new_hashes.txt
           
-          NEW_HASHES=()
-          NEW_IDS=()
-          
-          for i in "${!IDS_ARRAY[@]}"; do
-            ID="${IDS_ARRAY[$i]}"
-            HASH=$(hash_id "$ID")
-            if ! echo "${{ env.PREV_HASHES }}" | jq -e --arg h "$HASH" 'index($h) != null' > /dev/null; then
-              NEW_HASHES+=("$HASH")
-              NEW_IDS+=("$ID")
-            fi
-          done
-          
-          NEW_HASHES_JSON=$(printf '%s\n' "${NEW_HASHES[@]}" | jq -R . | jq -s .)
-          NEW_IDS_JSON=$(printf '%s\n' "${NEW_IDS[@]}" | jq -R . | jq -s .)
-          
-          echo "NEW_HASHES=$NEW_HASHES_JSON" >> $GITHUB_ENV
-          echo "NEW_IDS=$NEW_IDS_JSON" >> $GITHUB_ENV
-
-          if [ "${#NEW_IDS[@]}" -gt 0 ]; then
-            echo "새 영상 발견: ${#NEW_IDS[@]}개"
-            for i in "${!NEW_IDS[@]}"; do
-              ID="${NEW_IDS[$i]}"
-              TITLE="${TITLES_ARRAY[$i]}"
-              DATE="${DATES_ARRAY[$i]}"
+          # 각 영상 확인
+          line_num=0
+          while IFS= read -r video_id; do
+            line_num=$((line_num + 1))
+            
+            # 해시 생성
+            video_hash=$(hash_id "$video_id")
+            
+            # 기존 해시 목록에 있는지 확인
+            if ! grep -Fxq "$video_hash" prev_hashes.txt; then
+              echo "새 영상 발견: $video_id"
+              echo "$video_hash" >> new_hashes.txt
               
-              MESSAGE="🎥 **새 영상 업로드!**\n제목: $TITLE\n날짜: $DATE\n링크: https://youtu.be/$ID"
+              # 제목과 날짜 가져오기
+              title=$(sed -n "${line_num}p" video_titles.txt)
+              date=$(sed -n "${line_num}p" video_dates.txt)
+              
+              # Discord 알림 전송
+              message="🎥 **새 영상 업로드!**\n제목: $title\n날짜: $date\n링크: https://youtu.be/$video_id"
               curl -H "Content-Type: application/json" \
                    -X POST \
-                   -d "{\"content\": \"$MESSAGE\"}" \
+                   -d "{\"content\": \"$message\"}" \
                    ${{ secrets.DISCORD_WEBHOOK_URL }}
-            done
+              
+              sleep 1  # Discord API 레이트 리밋 방지
+            fi
+          done < video_ids.txt
+          
+          # 새 해시가 있는지 확인
+          if [ -s new_hashes.txt ]; then
+            echo "NEW_VIDEOS=true" >> $GITHUB_ENV
           else
+            echo "NEW_VIDEOS=false" >> $GITHUB_ENV
             echo "새 영상 없음"
           fi
 
       - name: 상태 파일 업데이트  # state.json에 새 해시 저장 및 GitHub 푸시
-        if: env.NEW_HASHES != '[]'
+        if: env.NEW_VIDEOS == 'true'
         run: |
-          # 기존 해시에 새 해시 추가, 중복 제거, MAX_STORED 초과 시 최근 MAX_STORED 개만 유지
-          UPDATED_HASHES=$(echo "${{ env.PREV_HASHES }}" | jq --argjson new "${{ env.NEW_HASHES }}" '. + $new | unique | if length > ${{ env.MAX_STORED }} then .[-${{ env.MAX_STORED }}:] else . end')
-          echo "{\"posted\": $UPDATED_HASHES}" > state.json
+          # 기존 해시와 새 해시 병합, 중복 제거
+          cat prev_hashes.txt new_hashes.txt | sort -u > all_hashes.txt
           
+          # MAX_STORED 개수만큼만 유지 (최근 것들)
+          tail -n ${{ env.MAX_STORED }} all_hashes.txt > final_hashes.txt
+          
+          # JSON 형식으로 저장
+          echo -n '{"posted":[' > state.json
+          first=true
+          while IFS= read -r hash; do
+            if [ "$first" = true ]; then
+              echo -n "\"$hash\"" >> state.json
+              first=false
+            else
+              echo -n ",\"$hash\"" >> state.json
+            fi
+          done < final_hashes.txt
+          echo ']}' >> state.json
+          
+          # Git 커밋 및 푸시
           git config --global user.name "github-actions"
           git config --global user.email "actions@github.com"
           git add state.json
