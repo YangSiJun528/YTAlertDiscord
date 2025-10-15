@@ -14,7 +14,7 @@ YouTube 채널의 새 영상을 자동으로 감지하여 Discord로 알림을 �
 2. GitHub 레포지토리 Settings > Secrets and variables > Actions에서 다음 Secrets 추가:
    - `CHANNEL_ID`: YouTube 채널 ID (UCxxxxxxxxxxxxxxxxxxxxx 형식)
    - `DISCORD_WEBHOOK_URL`: Discord Webhook URL
-   - `HASH_SALT`: 랜덤 문자열 (예: `openssl rand -hex 16` 실행 결과)
+   - `HASH_SALT`: HASH SALT 값. 랜덤 문자열 권장 (예: `openssl rand -hex 16` 실행 결과)
 
 ## 설정
 
