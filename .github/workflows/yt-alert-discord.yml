@@ -41,7 +41,7 @@ jobs:
       - name: 최신 영상 정보 추출  # RSS에서 영상 ID, 제목, 업로드 날짜 추출
         id: extract
         run: |
-          # 최근 MAX_EXTRACT 개 영상의 ID, 제목, 업로드 시간 추출
+          # 최근 MAX_EXTRACT 개 영상의 ID, 제목, 업로드 시간 추출 (제목이랑 업로드 시간이 이상하게 나오는 이슈 있음. 제목에 유튜버 이름 나오고, 날짜는 몇년 전으로 나오는... 그냥 안보여주는걸로 임시조치)
           grep -oPm${MAX_EXTRACT} "<yt:videoId>[^<]+" feed.xml | sed 's/<yt:videoId>//' > video_ids.txt
           grep -oPm${MAX_EXTRACT} "<title>[^<]+" feed.xml | sed 's/<title>//' > video_titles.txt
           grep -oPm${MAX_EXTRACT} "<published>[^<]+" feed.xml | sed 's/<published>//' > video_dates.txt
@@ -100,7 +100,7 @@ jobs:
             
             # 역순으로 알림 전송
             tac new_videos_info.txt | while IFS='|' read -r video_id title date; do
-              message="🎥 **새 영상 업로드!**\n제목: $title\n날짜: $date\n링크: https://youtu.be/$video_id"
+              message="🎥 **새 영상 업로드!**\nhttps://youtu.be/$video_id"
               curl -H "Content-Type: application/json" \
                    -X POST \
                    -d "{\"content\": \"$message\"}" \
