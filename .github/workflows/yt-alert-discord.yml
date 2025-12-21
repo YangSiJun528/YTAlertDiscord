@@ -18,8 +18,9 @@ jobs:
   notify:
     runs-on: ubuntu-latest
     env:
-      MAX_EXTRACT: 5     # RSS에서 확인할 최대 영상 개수 (예: 10으로 늘리면 더 많은 영상 확인)
-      MAX_STORED: 100    # state.json에 저장할 최대 해시 개수 (오래된 것부터 자동 삭제)
+      MAX_EXTRACT: 5       # RSS에서 확인할 최대 영상 개수 (예: 10으로 늘리면 더 많은 영상 확인)
+      MAX_STORED: 100      # state.json에 저장할 최대 해시 개수 (오래된 것부터 자동 삭제)
+      SKIP_ON_FETCH_FAIL: true  # RSS 다운로드 실패 시 에러 없이 스킵 (true: 스킵, false: 에러)
 
     steps:
       - name: 체크아웃 코드  # 레포지토리 코드 가져오기
@@ -33,12 +34,19 @@ jobs:
           echo "RSS 피드 다운로드 중..."
           if curl -s --fail "$RSS_URL" > feed.xml; then
             echo "RSS 피드 다운로드 성공"
+            echo "FETCH_SUCCESS=true" >> $GITHUB_ENV
           else
             echo "RSS 피드 다운로드 실패 (CHANNEL_ID가 올바른지 확인하세요)"
-            exit 1
+            if [ "${{ env.SKIP_ON_FETCH_FAIL }}" = "true" ]; then
+              echo "SKIP_ON_FETCH_FAIL 활성화 - 스킵합니다"
+              echo "FETCH_SUCCESS=false" >> $GITHUB_ENV
+            else
+              exit 1
+            fi
           fi
 
       - name: 최신 영상 정보 추출  # RSS에서 영상 ID, 제목, 업로드 날짜 추출
+        if: env.FETCH_SUCCESS == 'true'
         id: extract
         run: |
           # 최근 MAX_EXTRACT 개 영상의 ID, 제목, 업로드 시간 추출 (제목이랑 업로드 시간이 이상하게 나오는 이슈 있음. 제목에 유튜버 이름 나오고, 날짜는 몇년 전으로 나오는... 그냥 안보여주는걸로 임시조치)
@@ -49,6 +57,7 @@ jobs:
           echo "영상 정보 추출 완료"
 
       - name: 이전 업로드 상태 불러오기  # state.json에서 이전 영상 해시 목록 가져오기
+        if: env.FETCH_SUCCESS == 'true'
         id: state
         run: |
           STATE_FILE=state.json
@@ -61,6 +70,7 @@ jobs:
           echo "이전 해시 목록 로드 완료"
 
       - name: 새로운 영상 확인 및 알림 전송  # 새 영상 확인 후 Discord로 알림 보내기
+        if: env.FETCH_SUCCESS == 'true'
         id: notify
         run: |
           # 해시 함수: 영상 ID + 솔트를 SHA-256으로 해시
@@ -114,7 +124,7 @@ jobs:
           fi
 
       - name: 상태 파일 업데이트  # state.json에 새 해시 저장 및 GitHub 푸시
-        if: env.NEW_VIDEOS == 'true'
+        if: env.FETCH_SUCCESS == 'true' && env.NEW_VIDEOS == 'true'
         run: |
           # 기존 해시와 새 해시 병합, 중복 제거
           cat prev_hashes.txt new_hashes.txt | sort -u > all_hashes.txt
